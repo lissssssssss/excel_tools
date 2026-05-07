@@ -238,7 +238,7 @@ def extract_images_per_sheet(xls_path: Path, logger: logging.Logger):
     #     0x0020 = chart
     #     ...
     # MsoDrawingGroup (0xEB) 在 globals 流; MsoDrawing (0xEC) 在每个 sheet 流。
-    # sheet_idx 从 0 开始计数 (和 xlrd 的 sheet 顺序一致)。
+    # sheet_idx 从 0 开始计数 (和 xlrd 的 sheet 顺序一致)。 
     mso_dg_group = bytearray()
     mso_drawings_per_sheet: dict = {}
     current_sheet_idx = -1  # -1 = globals 或未进入任何 sheet
