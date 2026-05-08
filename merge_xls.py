@@ -717,7 +717,7 @@ def parse_xlsx_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
             except Exception:
                 continue
 
-        images = images_by_sheet.get(sheet_idx, {})
+        images = images_by_sheet.get(sheet_idx, {})  # row1 -> [(fmt, bytes), ...]
 
         n_rows_with_image = 0
         for r in range(2, last_row_1based + 1):
@@ -730,7 +730,8 @@ def parse_xlsx_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
                 v for ci, (v, _st) in enumerate(cells)
                 if ci != image_col and v not in (None, "", " ")
             ]
-            imgs = images.get(r, []) if image_col >= 0 else []
+            # 即使表头没识别出图片列，也保留图片；写出时会自动创建图片列承载它们
+            imgs = images.get(r, [])
             if not non_image_vals and not imgs:
                 parsed.n_blank_rows_skipped += 1
                 continue
@@ -938,7 +939,8 @@ def _parse_one_sheet(
             v for c, (v, _x) in enumerate(cells)
             if c != image_col and v not in (None, "", " ")
         ]
-        imgs = images.get(r, []) if image_col >= 0 else []
+        # 即使表头没识别出图片列，也保留图片；写出时会自动创建图片列承载它们
+        imgs = images.get(r, [])
 
         if not non_image_vals and not imgs:
             parsed.n_blank_rows_skipped += 1
@@ -1042,7 +1044,14 @@ def write_merged_xlsx(
     canonical_header = [v for v, _ in canonical.header_cells]
     canonical_image_col = canonical.image_col
     canonical_tracking_col = canonical.tracking_col
-    n_canon_cols = len(canonical_header)
+
+    base_cols = len(canonical_header)
+    any_images = any((row.images for pf in parsed_files for row in pf.rows))
+    add_image_column = (canonical_image_col < 0 and any_images)
+    out_image_col = canonical_image_col if canonical_image_col >= 0 else (base_cols if add_image_column else -1)
+    n_canon_cols = base_cols + (1 if add_image_column else 0)
+    src_file_col = n_canon_cols + 1
+    src_row_col = n_canon_cols + 2
 
     # 同一文件下的 sheet 数量统计 (用于决定是否在 "源文件" 里附 sheet 名)
     file_sheet_count: dict = defaultdict(int)
@@ -1072,7 +1081,11 @@ def write_merged_xlsx(
     ws.title = "汇总"
 
     # ---- 表头 ----
-    extended_header = list(canonical_header) + ["源文件", "源文件行号"]
+    # canonical_header 可能不含图片列；若源数据有图片但表头没识别出“图”，则在输出中追加“图片”列
+    extended_header = list(canonical_header)
+    if add_image_column:
+        extended_header.append("图片")
+    extended_header += ["源文件", "源文件行号"]
     for col_idx, (val, xfi) in enumerate(canonical.header_cells, start=1):
         cell = ws.cell(row=1, column=col_idx, value=val)
         if isinstance(xfi, int):
@@ -1090,8 +1103,11 @@ def write_merged_xlsx(
                 name=base.name, size=base.size, bold=True,
                 italic=base.italic, color=base.color, underline=base.underline,
             )
-    extra1 = ws.cell(row=1, column=n_canon_cols + 1, value="源文件")
-    extra2 = ws.cell(row=1, column=n_canon_cols + 2, value="源文件行号")
+    if add_image_column:
+        img_h = ws.cell(row=1, column=base_cols + 1, value="图片")
+        img_h.font = Font(bold=True)
+    extra1 = ws.cell(row=1, column=src_file_col, value="源文件")
+    extra2 = ws.cell(row=1, column=src_row_col, value="源文件行号")
     bold_font = Font(bold=True)
     extra1.font = bold_font
     extra2.font = bold_font
@@ -1099,7 +1115,7 @@ def write_merged_xlsx(
     # ---- 列宽 ----
     for c in range(n_canon_cols):
         col_letter = get_column_letter(c + 1)
-        if c == canonical_image_col:
+        if c == out_image_col:
             ws.column_dimensions[col_letter].width = max(
                 _IMG_COL_WIDTH_CHARS,
                 canonical.col_widths_chars.get(c, _IMG_COL_WIDTH_CHARS),
@@ -1108,8 +1124,8 @@ def write_merged_xlsx(
             w = canonical.col_widths_chars.get(c)
             if w:
                 ws.column_dimensions[col_letter].width = w
-    ws.column_dimensions[get_column_letter(n_canon_cols + 1)].width = 36
-    ws.column_dimensions[get_column_letter(n_canon_cols + 2)].width = 12
+    ws.column_dimensions[get_column_letter(src_file_col)].width = 36
+    ws.column_dimensions[get_column_letter(src_row_col)].width = 12
 
     # 表头行高
     if canonical.book is not None and hasattr(canonical.book, "sheet_by_index"):
@@ -1158,13 +1174,15 @@ def write_merged_xlsx(
 
                 src_to_out[prow.src_row_0based] = out_row
                 cells = list(prow.cells)
-                if len(cells) > n_canon_cols:
-                    cells = cells[:n_canon_cols]
-                while len(cells) < n_canon_cols:
+                if len(cells) > base_cols:
+                    cells = cells[:base_cols]
+                while len(cells) < base_cols:
+                    cells.append((None, 0))
+                if add_image_column:
                     cells.append((None, 0))
 
                 for col_idx, (val, xfi) in enumerate(cells, start=1):
-                    is_image_col = (col_idx - 1) == canonical_image_col
+                    is_image_col = (col_idx - 1) == out_image_col
                     cell = ws.cell(
                         row=out_row,
                         column=col_idx,
@@ -1179,11 +1197,11 @@ def write_merged_xlsx(
                         except Exception:
                             pass
 
-                ws.cell(row=out_row, column=n_canon_cols + 1, value=src_label)
-                ws.cell(row=out_row, column=n_canon_cols + 2, value=prow.src_row_1based)
+                ws.cell(row=out_row, column=src_file_col, value=src_label)
+                ws.cell(row=out_row, column=src_row_col, value=prow.src_row_1based)
 
-                if prow.images and canonical_image_col >= 0:
-                    cell_addr = f"{get_column_letter(canonical_image_col + 1)}{out_row}"
+                if prow.images and out_image_col >= 0:
+                    cell_addr = f"{get_column_letter(out_image_col + 1)}{out_row}"
                     # Excel drawing unit: 1 px = 9525 EMU
                     _EMU_PER_PX = 9525
                     for i, (fmt, image_bytes) in enumerate(prow.images):
@@ -1235,7 +1253,7 @@ def write_merged_xlsx(
             # 跳过表头里 (rlo == 0) 的合并: 我们的输出表头只占 1 行
             if rlo == 0 and rhi == 1:
                 # 单行合并: 如果跨多列, 应用到输出表头
-                end_col = min(chi, n_canon_cols + 1)
+                end_col = min(chi, n_canon_cols)
                 if end_col - clo > 1:
                     try:
                         ws.merge_cells(
@@ -1268,7 +1286,7 @@ def write_merged_xlsx(
                     pf.src_file, rlo + 1, rhi, clo + 1, chi,
                 )
                 continue
-            end_col = min(chi, n_canon_cols + 1)  # 不越过 n_canon_cols
+            end_col = min(chi, n_canon_cols)  # 不越过 n_canon_cols
             if end_col <= clo:
                 continue
             try:
