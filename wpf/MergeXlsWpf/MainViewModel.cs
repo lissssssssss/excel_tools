@@ -14,7 +14,6 @@ public sealed class MainViewModel : ObservableObject
 {
     private string _sourceDir = "";
     private string _outputDir = "";
-    private string _extraArgs = "";
     private string _logText = "";
     private string _statusText = "就绪";
     private bool _isRunning;
@@ -24,11 +23,8 @@ public sealed class MainViewModel : ObservableObject
 
     public MainViewModel()
     {
-        ExtraArgs = "";
-
         BrowseSourceDirCommand = new RelayCommand(BrowseSourceDir, () => IsNotRunning);
         BrowseOutputDirCommand = new RelayCommand(BrowseOutputDir, () => IsNotRunning);
-        ResetArgsCommand = new RelayCommand(() => ExtraArgs = "", () => IsNotRunning);
 
         RunCommand = new RelayCommand(async () => await RunAsync(), () => IsNotRunning);
         CancelCommand = new RelayCommand(Cancel, () => IsRunning);
@@ -37,7 +33,6 @@ public sealed class MainViewModel : ObservableObject
 
     public string SourceDir { get => _sourceDir; set => Set(ref _sourceDir, value); }
     public string OutputDir { get => _outputDir; set => Set(ref _outputDir, value); }
-    public string ExtraArgs { get => _extraArgs; set => Set(ref _extraArgs, value); }
     public string LogText { get => _logText; set => Set(ref _logText, value); }
     public string StatusText { get => _statusText; set => Set(ref _statusText, value); }
 
@@ -51,7 +46,6 @@ public sealed class MainViewModel : ObservableObject
                 Raise(nameof(IsNotRunning));
                 (BrowseSourceDirCommand as RelayCommand)?.RaiseCanExecuteChanged();
                 (BrowseOutputDirCommand as RelayCommand)?.RaiseCanExecuteChanged();
-                (ResetArgsCommand as RelayCommand)?.RaiseCanExecuteChanged();
                 (RunCommand as RelayCommand)?.RaiseCanExecuteChanged();
                 (CancelCommand as RelayCommand)?.RaiseCanExecuteChanged();
                 (ClearLogCommand as RelayCommand)?.RaiseCanExecuteChanged();
@@ -63,7 +57,6 @@ public sealed class MainViewModel : ObservableObject
 
     public ICommand BrowseSourceDirCommand { get; }
     public ICommand BrowseOutputDirCommand { get; }
-    public ICommand ResetArgsCommand { get; }
     public ICommand RunCommand { get; }
     public ICommand CancelCommand { get; }
     public ICommand ClearLogCommand { get; }
@@ -149,10 +142,6 @@ public sealed class MainViewModel : ObservableObject
         var args = new StringBuilder();
         args.Append('"').Append(SourceDir).Append('"').Append(' ');
         args.Append('"').Append(OutputDir).Append('"');
-        if (!string.IsNullOrWhiteSpace(ExtraArgs))
-        {
-            args.Append(' ').Append(ExtraArgs.Trim());
-        }
 
         var psi = new ProcessStartInfo
         {
@@ -166,6 +155,9 @@ public sealed class MainViewModel : ObservableObject
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(coreExePath) ?? Environment.CurrentDirectory,
         };
+        // Force UTF-8 output from the embedded Python core (avoid Chinese garbling).
+        psi.Environment["PYTHONUTF8"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
 
         AppendLog("Command:");
         AppendLog($"  \"{psi.FileName}\" {psi.Arguments}");

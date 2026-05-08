@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:MergeXlsWpf"
         mc:Ignorable="d"
-        Title="Excel .xls 按月汇总（Python）" Height="760" Width="1100"
+        Title="按月汇总Excel文件" Height="640" Width="980"
         WindowStartupLocation="CenterScreen">
 
   <Window.DataContext>
@@ -23,23 +23,43 @@
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <TextBlock Grid.Row="0" FontSize="18" FontWeight="SemiBold" Text="按月合并 .xls → .xlsx（核心逻辑由 Python 执行）"/>
+    <Grid Grid.Row="0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <StackPanel Grid.Column="0">
+        <TextBlock FontSize="18" FontWeight="SemiBold" Text="按月汇总Excel文件（支持 .xls / .xlsx）"/>
+        <TextBlock Margin="0,6,0,0" Foreground="#555" TextWrapping="Wrap">
+          <Run Text="选择“源目录”后会递归扫描所有子文件夹，按文件名开头的“月.日”分组（例如 3.10、4.2），每个月合并输出一个汇总 .xlsx。"/>
+        </TextBlock>
+      </StackPanel>
+      <Border Grid.Column="1" Margin="12,2,0,0" Width="28" Height="28" CornerRadius="14" BorderBrush="#CCC" BorderThickness="1" Background="#FAFAFA"
+              VerticalAlignment="Top" HorizontalAlignment="Right">
+        <TextBlock Text="?" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" Foreground="#666">
+          <TextBlock.ToolTip>
+            <ToolTip Placement="Bottom" MaxWidth="520">
+              <StackPanel>
+                <TextBlock FontWeight="SemiBold" Text="汇总规则说明" Margin="0,0,0,8"/>
+                <TextBlock TextWrapping="Wrap">
+                  <Run Text="1) 支持文件类型：.xls / .xlsx（含多 sheet）。&#10;"/>
+                  <Run Text="2) 源文件指定：选择一个目录，程序会递归查找其下所有 Excel 文件。&#10;"/>
+                  <Run Text="3) 文件名要求：文件名以“月.日”开头（例如 3.10做单表格...）。&#10;"/>
+                  <Run Text="4) 输出目录：需要可写，会生成“2月汇总.xlsx、3月汇总.xlsx...”并写入 merge.log。&#10;"/>
+                  <Run Text="5) 合并逻辑：按文件（日期）顺序拼接行；同月内按“快递单号”全局去重（空单号不去重）。&#10;"/>
+                  <Run Text="6) 复制内容：尽量保留单元格格式/合并单元格/行高列宽，并复制图片。"/>
+                </TextBlock>
+              </StackPanel>
+            </ToolTip>
+          </TextBlock.ToolTip>
+        </TextBlock>
+      </Border>
+    </Grid>
 
     <Border Grid.Row="1" Margin="0,12,0,0" Padding="12" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="140"/>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="110"/>
-        </Grid.ColumnDefinitions>
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="参数"/>
-        <TextBox Grid.Row="0" Grid.Column="1" Margin="10,0,10,0" Text="{Binding ExtraArgs, UpdateSourceTrigger=PropertyChanged}"/>
-        <Button Grid.Row="0" Grid.Column="2" Content="重置" Command="{Binding ResetArgsCommand}"/>
-      </Grid>
+      <TextBlock Foreground="#555" TextWrapping="Wrap">
+        <Run Text="提示：如果你的源目录里有很多层文件夹也没关系，程序会自动递归扫描。"/>
+      </TextBlock>
     </Border>
 
     <Border Grid.Row="2" Margin="0,12,0,0" Padding="12" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8">
@@ -54,7 +74,7 @@
           <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="源目录 (xls)"/>
+        <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="源目录（xls/xlsx）"/>
         <TextBox Grid.Row="0" Grid.Column="1" Margin="10,0,10,0" Text="{Binding SourceDir, UpdateSourceTrigger=PropertyChanged}"/>
         <Button Grid.Row="0" Grid.Column="2" Content="选择..." Command="{Binding BrowseSourceDirCommand}"/>
 
@@ -82,17 +102,15 @@
     <ProgressBar Grid.Row="4" Height="10" Margin="0,8,0,0"
                  IsIndeterminate="{Binding IsRunning}"/>
 
-    <Border Grid.Row="5" Margin="0,12,0,0" Padding="10" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8">
-      <Grid>
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <DockPanel Grid.Row="0" Margin="0,0,0,8">
-          <TextBlock DockPanel.Dock="Left" FontWeight="SemiBold" Text="运行日志"/>
+    <Expander Grid.Row="5" Margin="0,12,0,0" IsExpanded="False">
+      <Expander.Header>
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Left" FontWeight="SemiBold" Text="运行日志（研发用）"/>
           <TextBlock DockPanel.Dock="Right" Foreground="#666" Text="{Binding StatusText}"/>
         </DockPanel>
-        <TextBox Grid.Row="1"
+      </Expander.Header>
+      <Border Padding="10" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8" Margin="0,6,0,0">
+        <TextBox Height="160"
                  FontFamily="Consolas"
                  FontSize="12"
                  Text="{Binding LogText}"
@@ -101,11 +119,12 @@
                  VerticalScrollBarVisibility="Auto"
                  HorizontalScrollBarVisibility="Auto"
                  TextWrapping="NoWrap"/>
-      </Grid>
-    </Border>
+      </Border>
+    </Expander>
 
-    <TextBlock Grid.Row="6" Margin="0,12,0,0" Foreground="#666"
-               Text="提示：这是单一 exe 版本。核心 merge_xls.exe 已被内嵌在程序里，运行时会自动解压后执行。"/>
+    <TextBlock Grid.Row="6" Margin="0,12,0,0" Foreground="#666" TextWrapping="Wrap">
+      <Run Text="说明：这是单一 exe 版本。运行时会自动释放内嵌核心并执行；如遇问题可展开“运行日志（研发用）”查看详细信息。"/>
+    </TextBlock>
   </Grid>
 </Window>
 

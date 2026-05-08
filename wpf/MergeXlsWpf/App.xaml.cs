@@ -32,6 +32,16 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
+        // Allow GBK/CP936 decoding if needed.
+        try
+        {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        }
+        catch
+        {
+            // ignore
+        }
+
         // Catch early crashes and write a log.
         this.DispatcherUnhandledException += (_, ex) =>
         {

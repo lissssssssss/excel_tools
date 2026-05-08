@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import os
 import re
 import struct
 import sys
@@ -39,10 +40,11 @@ from pathlib import Path
 
 import olefile
 import xlrd
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import range_boundaries
 from PIL import Image as PILImage
 
 
@@ -69,6 +71,17 @@ def setup_logger(log_path: Path) -> logging.Logger:
     logger.addHandler(fh)
 
     return logger
+
+
+def _force_utf8_stdio():
+    """在 Windows 下避免中文日志乱码（WPF 侧用 UTF-8 读取）。"""
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 # ====== .xls BIFF / OfficeArt 解析 (用于图片抽取) ===========================
@@ -445,6 +458,8 @@ class StyleCache:
         self._cache: dict = {}
 
     def get(self, book, xf_index: int):
+        if book is None or not isinstance(xf_index, int):
+            return (None, None, None, "General")
         key = (id(book), xf_index)
         if key in self._cache:
             return self._cache[key]
@@ -545,8 +560,8 @@ class ParsedFile:
     src_sheet: str
     sheet_idx: int
     src_path: Path
-    book: xlrd.book.Book                  # workbook 共享 (XF 索引是 workbook 级)
-    header_cells: list                    # [(value, xf_index)]
+    book: object | None                   # .xls=xlrd book; .xlsx=None（样式直接存 openpyxl style token）
+    header_cells: list                    # [(value, style_token)]  style_token: int(xf) 或 openpyxl StyleArray
     rows: list[ParsedRow] = field(default_factory=list)
     image_col: int = -1
     tracking_col: int = -1                # 快递单号列
@@ -555,6 +570,200 @@ class ParsedFile:
     col_widths_chars: dict = field(default_factory=dict)
     merges: list = field(default_factory=list)
 
+
+def parse_excel_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
+    """统一入口：支持 .xls / .xlsx。"""
+    suf = path.suffix.lower()
+    if suf == ".xls":
+        return parse_xls_file(path, logger)
+    if suf == ".xlsx":
+        return parse_xlsx_file(path, logger)
+    logger.info("跳过不支持的文件: %s", path.name)
+    return []
+
+
+def _opx_last_data_row(ws, max_cols: int) -> int:
+    last = 1
+    for r in range(ws.max_row, 1, -1):
+        for c in range(1, max_cols + 1):
+            v = ws.cell(row=r, column=c).value
+            if v not in (None, "", " "):
+                return r
+    return last
+
+
+def _opx_last_data_col(header_values: list) -> int:
+    last = -1
+    for i, v in enumerate(header_values, start=1):
+        if v not in (None, "", " "):
+            last = i
+    return last
+
+
+def _extract_xlsx_images_per_sheet(wb, logger: logging.Logger):
+    """按 sheet_idx 提取 openpyxl 图片锚点，返回 {sheet_idx: {row1: (fmt, bytes)}}。
+    row1 是 1-based（与 openpyxl 行号一致）。"""
+    out: dict = {}
+    for sheet_idx, ws in enumerate(wb.worksheets):
+        imgs = getattr(ws, "_images", []) or []
+        if not imgs:
+            continue
+        pending: list = []  # [(target_row1, fmt, bytes, y)]
+        for im in imgs:
+            try:
+                anchor = getattr(im, "anchor", None)
+                if anchor is None or not hasattr(anchor, "_from"):
+                    continue
+                r1 = int(anchor._from.row) + 1  # openpyxl anchor row is 0-based
+                target_row1 = max(1, r1)
+                raw = im._data()  # bytes
+                fmt = "png" if raw[:8] == b"\x89PNG\r\n\x1a\n" else "jpeg"
+                pending.append((target_row1, fmt, raw, float(target_row1)))
+            except Exception:
+                continue
+
+        pending.sort(key=lambda x: (x[0], x[3]))
+        result: dict = {}
+        overflow: list = []
+        for tr, fmt, raw, y in pending:
+            if tr in result:
+                overflow.append((tr, fmt, raw, y))
+            else:
+                result[tr] = (fmt, raw)
+
+        _OVERFLOW_WINDOW = 3
+        for tr, fmt, raw, y in overflow:
+            actual = None
+            for delta in range(1, _OVERFLOW_WINDOW + 1):
+                cand = tr + delta
+                if cand not in result:
+                    actual = cand
+                    break
+            if actual is not None:
+                result[actual] = (fmt, raw)
+            else:
+                logger.warning("[xlsx sheet#%d] 第 %d 行有多余图片, 已丢弃", sheet_idx, tr)
+
+        out[sheet_idx] = result
+    return out
+
+
+def parse_xlsx_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
+    try:
+        wb = load_workbook(str(path), data_only=False)
+    except Exception as e:
+        logger.error("[%s] 无法用 openpyxl 打开: %s", path.name, e)
+        logger.debug(traceback.format_exc())
+        return []
+
+    images_by_sheet = _extract_xlsx_images_per_sheet(wb, logger)
+    parsed_sheets: list[ParsedFile] = []
+
+    for sheet_idx, ws in enumerate(wb.worksheets):
+        # hidden sheets: 'hidden' or 'veryHidden'
+        if getattr(ws, "sheet_state", "visible") != "visible":
+            logger.info("[%s] sheet#%d '%s' 是隐藏的, 跳过", path.name, sheet_idx, ws.title)
+            continue
+
+        tag = f"{path.name} sheet#{sheet_idx} '{ws.title}'"
+        if ws.max_row < 1 or ws.max_column < 1:
+            logger.warning("[%s] 是空的, 跳过", tag)
+            continue
+
+        raw_header = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        last_col_1based = _opx_last_data_col(raw_header)
+        if last_col_1based < 1:
+            logger.warning("[%s] 表头全为空, 跳过", tag)
+            continue
+        header_values = raw_header[:last_col_1based]
+        image_col = _detect_image_col(header_values)  # 0-based
+        tracking_col = _detect_tracking_col(header_values)  # 0-based
+        if tracking_col < 0:
+            logger.warning("[%s] 表头里没找到 '快递单号' 列, 该 sheet 不参与去重", tag)
+
+        last_row_1based = _opx_last_data_row(ws, last_col_1based)
+        if last_row_1based < 2:
+            logger.warning("[%s] 没有数据行 (除了表头), 跳过", tag)
+            continue
+
+        header_cells = []
+        for c in range(1, last_col_1based + 1):
+            cell = ws.cell(row=1, column=c)
+            header_cells.append((cell.value, cell._style))
+
+        parsed = ParsedFile(
+            src_file=path.name,
+            src_sheet=ws.title,
+            sheet_idx=sheet_idx,
+            src_path=path,
+            book=None,  # type: ignore
+            header_cells=header_cells,
+            image_col=image_col,
+            tracking_col=tracking_col,
+        )
+
+        # column widths
+        for c in range(1, last_col_1based + 1):
+            letter = get_column_letter(c)
+            dim = ws.column_dimensions.get(letter)
+            if dim and dim.width:
+                parsed.col_widths_chars[c - 1] = float(dim.width)
+
+        # merges
+        for mr in ws.merged_cells.ranges:
+            try:
+                min_col, min_row, max_col, max_row = range_boundaries(str(mr))
+                if max_row <= last_row_1based and max_col <= last_col_1based:
+                    # convert to xlrd-like (rlo, rhi, clo, chi) with 0-based, hi exclusive
+                    parsed.merges.append((min_row - 1, max_row, min_col - 1, max_col))
+            except Exception:
+                continue
+
+        images = images_by_sheet.get(sheet_idx, {})
+
+        n_rows_with_image = 0
+        for r in range(2, last_row_1based + 1):
+            cells = []
+            for c in range(1, last_col_1based + 1):
+                cell = ws.cell(row=r, column=c)
+                cells.append((cell.value, cell._style))
+
+            non_image_vals = [
+                v for ci, (v, _st) in enumerate(cells)
+                if ci != image_col and v not in (None, "", " ")
+            ]
+            img = images.get(r) if image_col >= 0 else None
+            if not non_image_vals and img is None:
+                parsed.n_blank_rows_skipped += 1
+                continue
+
+            row_height = None
+            dim = ws.row_dimensions.get(r)
+            if dim and dim.height:
+                row_height = float(dim.height)
+
+            parsed.rows.append(
+                ParsedRow(
+                    cells=cells,
+                    image=img,
+                    src_file=path.name,
+                    src_sheet=ws.title,
+                    src_row_0based=r - 1,
+                    src_row_1based=r,
+                    row_height_pt=row_height,
+                )
+            )
+            if img is not None:
+                n_rows_with_image += 1
+            parsed.n_data_rows_total += 1
+
+        logger.info(
+            "[%s] 数据行=%d, 嵌入图片=%d, 跳过空白=%d",
+            tag, parsed.n_data_rows_total, n_rows_with_image, parsed.n_blank_rows_skipped,
+        )
+        parsed_sheets.append(parsed)
+
+    return parsed_sheets
 
 def _detect_image_col(header_values: list) -> int:
     for idx, h in enumerate(header_values):
@@ -867,8 +1076,15 @@ def write_merged_xlsx(
     extended_header = list(canonical_header) + ["源文件", "源文件行号"]
     for col_idx, (val, xfi) in enumerate(canonical.header_cells, start=1):
         cell = ws.cell(row=1, column=col_idx, value=val)
-        font, align, border, nfmt = style_cache.get(canonical.book, xfi)
-        _apply_style(cell, font, align, border, nfmt)
+        if isinstance(xfi, int):
+            font, align, border, nfmt = style_cache.get(canonical.book, xfi)
+            _apply_style(cell, font, align, border, nfmt)
+        else:
+            # openpyxl 源样式直接复制
+            try:
+                cell._style = xfi  # type: ignore[attr-defined]
+            except Exception:
+                pass
         if cell.font is None or not cell.font.bold:
             base = cell.font or Font()
             cell.font = Font(
@@ -897,11 +1113,12 @@ def write_merged_xlsx(
     ws.column_dimensions[get_column_letter(n_canon_cols + 2)].width = 12
 
     # 表头行高
-    canonical_sh = canonical.book.sheet_by_index(canonical.sheet_idx)
-    if (canonical_sh.rowinfo_map or {}).get(0):
-        ri = canonical_sh.rowinfo_map[0]
-        if ri.height:
-            ws.row_dimensions[1].height = ri.height / 20.0
+    if canonical.book is not None and hasattr(canonical.book, "sheet_by_index"):
+        canonical_sh = canonical.book.sheet_by_index(canonical.sheet_idx)
+        if (canonical_sh.rowinfo_map or {}).get(0):
+            ri = canonical_sh.rowinfo_map[0]
+            if ri.height:
+                ws.row_dimensions[1].height = ri.height / 20.0
     ws.freeze_panes = "A2"
 
     # ---- 数据行 ----
@@ -953,8 +1170,14 @@ def write_merged_xlsx(
                         column=col_idx,
                         value=None if is_image_col else val,
                     )
-                    font, align, border, nfmt = style_cache.get(pf.book, xfi)
-                    _apply_style(cell, font, align, border, nfmt)
+                    if isinstance(xfi, int):
+                        font, align, border, nfmt = style_cache.get(pf.book, xfi)
+                        _apply_style(cell, font, align, border, nfmt)
+                    else:
+                        try:
+                            cell._style = xfi  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
 
                 ws.cell(row=out_row, column=n_canon_cols + 1, value=src_label)
                 ws.cell(row=out_row, column=n_canon_cols + 2, value=prow.src_row_1based)
@@ -1068,14 +1291,30 @@ _FNAME_RE = re.compile(r"^\s*(\d{1,2})\s*[\.\u3002]\s*(\d{1,2})(?=\D|$)")
 def group_files_by_month(src_dir: Path, logger: logging.Logger) -> dict[int, list[Path]]:
     groups: dict[int, list[tuple[int, str, Path]]] = defaultdict(list)
     skipped: list[str] = []
-    for p in sorted(src_dir.iterdir()):
-        if not p.is_file():
+    # 递归扫描所有子目录（用户数据经常按日期分文件夹存放）
+    # 同时避免扫描输出目录 _合并 / _out 等
+    ignore_dir_names = {"_合并", "_out", "__pycache__", ".git"}
+    candidates: list[Path] = []
+    for p in src_dir.rglob("*"):
+        try:
+            if p.is_dir():
+                # rglob 无法在这里剪枝，但先把常见目录过滤掉
+                if p.name in ignore_dir_names:
+                    continue
+                continue
+            if not p.is_file():
+                continue
+        except Exception:
             continue
         if p.name.startswith(".") or p.name.startswith("~$"):
             continue
-        if p.suffix.lower() != ".xls":
-            logger.info("跳过非 .xls 文件: %s", p.name)
+        if any(part in ignore_dir_names for part in p.parts):
             continue
+        if p.suffix.lower() not in (".xls", ".xlsx"):
+            continue
+        candidates.append(p)
+
+    for p in sorted(candidates, key=lambda x: x.name):
         m = _FNAME_RE.match(p.name)
         if not m:
             skipped.append(p.name)
@@ -1097,7 +1336,8 @@ def group_files_by_month(src_dir: Path, logger: logging.Logger) -> dict[int, lis
 
 
 def main():
-    ap = argparse.ArgumentParser(description="按月合并 .xls (含图片+格式+合并) 为 .xlsx")
+    _force_utf8_stdio()
+    ap = argparse.ArgumentParser(description="按月合并 .xls/.xlsx (含图片+格式+合并) 为 .xlsx")
     ap.add_argument(
         "src", nargs="?",
         default="/Users/lishengsheng/Documents/铝合金代发",
@@ -1128,7 +1368,7 @@ def main():
 
     groups = group_files_by_month(src_dir, logger)
     if not groups:
-        logger.warning("没找到任何可处理的 .xls 文件")
+        logger.warning("没找到任何可以处理的 .xls/.xlsx 文件")
         return
 
     for month in sorted(groups.keys()):
@@ -1139,7 +1379,7 @@ def main():
         n_files_used = 0
         for f in files:
             logger.info("解析: %s", f.name)
-            sheets = parse_xls_file(f, logger)
+            sheets = parse_excel_file(f, logger)
             if sheets:
                 parsed_list.extend(sheets)
                 n_files_used += 1
