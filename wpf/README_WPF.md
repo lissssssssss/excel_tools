@@ -56,9 +56,9 @@ dotnet restore
 dotnet publish -c Release
 ```
 
-发布产物默认在：
+发布产物默认在（self-contained + single-file）：
 
-`wpf\MergeXlsWpf\bin\Release\net8.0-windows\publish\`
+`wpf\MergeXlsWpf\bin\Release\net8.0-windows\win-x64\publish\`
 
 > `MergeXlsWpf.csproj` 已配置：如果你把 `wpf\merge_xls.exe` 放到位，会在编译时作为资源内嵌进最终 `MergeXlsWpf.exe`。
 

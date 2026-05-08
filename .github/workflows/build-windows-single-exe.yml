@@ -42,13 +42,16 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Publish WPF (single exe output)
+      - name: Publish WPF (self-contained single exe)
         run: |
-          dotnet publish .\wpf\MergeXlsWpf\MergeXlsWpf.csproj -c Release
+          dotnet publish .\wpf\MergeXlsWpf\MergeXlsWpf.csproj -c Release -r win-x64 --self-contained true `
+            /p:PublishSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:EnableCompressionInSingleFile=true
 
       - name: Collect artifact
         run: |
-          $publishDir = Resolve-Path .\wpf\MergeXlsWpf\bin\Release\net8.0-windows\publish
+          $publishDir = Resolve-Path .\wpf\MergeXlsWpf\bin\Release\net8.0-windows\win-x64\publish
           New-Item -ItemType Directory -Force -Path .\artifacts | Out-Null
           Copy-Item -Force "$publishDir\MergeXlsWpf.exe" .\artifacts\
 
