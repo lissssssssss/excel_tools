@@ -295,9 +295,8 @@ def _assign_shapes_to_rows(
     shapes: list, blip_table: list, xls_path: Path, sheet_idx: int,
     logger: logging.Logger,
 ):
-    """把同一 sheet 的形状转成 {row0: (fmt, image_bytes)}。
-    用图片几何中心定位归属行; 同行多张时, 多余的图片顺移到下面 3 行内的空行 (人工
-    粘贴位置不准的常见情形); 都被占用则丢弃并记日志。"""
+    """把同一 sheet 的形状转成 {row0: [(fmt, image_bytes), ...]}。
+    用图片几何中心定位归属行; 同行多张时全部保留 (写出时会堆叠在同一单元格)。"""
 
     pending: list = []
     skipped_vector = 0
@@ -318,57 +317,20 @@ def _assign_shapes_to_rows(
 
     pending.sort(key=lambda x: (x[0], x[3]))
 
-    result: dict = {}
-    overflow: list = []
-    for target_row, fmt, img_bytes, cy, _r1, _r2 in pending:
-        if target_row in result:
-            overflow.append((target_row, fmt, img_bytes, cy))
-        else:
-            result[target_row] = (fmt, img_bytes)
-
-    _OVERFLOW_WINDOW = 3
-    shifts: list = []
-    dropped: list = []
-    for target_row, fmt, img_bytes, cy in overflow:
-        actual = None
-        for delta in range(1, _OVERFLOW_WINDOW + 1):
-            candidate = target_row + delta
-            if candidate not in result:
-                actual = candidate
-                break
-        if actual is not None:
-            result[actual] = (fmt, img_bytes)
-            shifts.append((target_row, actual))
-        else:
-            dropped.append(target_row)
+    result: dict = defaultdict(list)
+    for target_row, fmt, img_bytes, _cy, _r1, _r2 in pending:
+        result[target_row].append((fmt, img_bytes))
 
     tag = f"{xls_path.name} sheet#{sheet_idx}"
     if skipped_vector:
         logger.warning("[%s] 跳过 %d 个矢量图片 (emf/wmf/pict)", tag, skipped_vector)
     if skipped_oob:
         logger.warning("[%s] 跳过 %d 个 pib 越界的形状", tag, skipped_oob)
-    if shifts:
-        from collections import Counter
-        by_origin = Counter(s[0] for s in shifts)
-        for orig_r, count in sorted(by_origin.items()):
-            actual_rows = ",".join(str(t + 1) for o, t in shifts if o == orig_r)
-            logger.warning(
-                "[%s] 第 %d 行多出 %d 张图片, 顺移到 Excel 行 %s",
-                tag, orig_r + 1, count, actual_rows,
-            )
-    if dropped:
-        from collections import Counter
-        by_origin = Counter(dropped)
-        for orig_r, count in sorted(by_origin.items()):
-            logger.warning(
-                "[%s] 第 %d 行有 %d 张多余图片, 后面 %d 行均已占用, 已丢弃",
-                tag, orig_r + 1, count, _OVERFLOW_WINDOW,
-            )
     logger.debug(
-        "[%s] 形状=%d, 已定位行数=%d, 顺移=%d, 丢弃=%d",
-        tag, len(shapes), len(result), len(shifts), len(dropped),
+        "[%s] 形状=%d, 已定位行数=%d",
+        tag, len(shapes), len(result),
     )
-    return result
+    return dict(result)
 
 
 # ====== xlrd → openpyxl 格式转换 ============================================
@@ -545,7 +507,7 @@ def _apply_style(cell, font, alignment, border, number_format):
 @dataclass
 class ParsedRow:
     cells: list                           # [(value, xf_index), ...]
-    image: tuple | None                   # (fmt, image_bytes) 或 None
+    images: list                          # [(fmt, image_bytes), ...]
     src_file: str
     src_sheet: str
     src_row_0based: int                   # 在源 sheet 中的行号 (xlrd 0-based)
@@ -637,7 +599,7 @@ def _opx_last_data_col(header_values: list) -> int:
 
 
 def _extract_xlsx_images_per_sheet(wb, logger: logging.Logger):
-    """按 sheet_idx 提取 openpyxl 图片锚点，返回 {sheet_idx: {row1: (fmt, bytes)}}。
+    """按 sheet_idx 提取 openpyxl 图片锚点，返回 {sheet_idx: {row1: [(fmt, bytes), ...]}}。
     row1 是 1-based（与 openpyxl 行号一致）。"""
     out: dict = {}
     for sheet_idx, ws in enumerate(wb.worksheets):
@@ -659,28 +621,11 @@ def _extract_xlsx_images_per_sheet(wb, logger: logging.Logger):
                 continue
 
         pending.sort(key=lambda x: (x[0], x[3]))
-        result: dict = {}
-        overflow: list = []
-        for tr, fmt, raw, y in pending:
-            if tr in result:
-                overflow.append((tr, fmt, raw, y))
-            else:
-                result[tr] = (fmt, raw)
+        grouped: dict = defaultdict(list)
+        for tr, fmt, raw, _y in pending:
+            grouped[tr].append((fmt, raw))
 
-        _OVERFLOW_WINDOW = 3
-        for tr, fmt, raw, y in overflow:
-            actual = None
-            for delta in range(1, _OVERFLOW_WINDOW + 1):
-                cand = tr + delta
-                if cand not in result:
-                    actual = cand
-                    break
-            if actual is not None:
-                result[actual] = (fmt, raw)
-            else:
-                logger.warning("[xlsx sheet#%d] 第 %d 行有多余图片, 已丢弃", sheet_idx, tr)
-
-        out[sheet_idx] = result
+        out[sheet_idx] = dict(grouped)
     return out
 
 
@@ -769,8 +714,8 @@ def parse_xlsx_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
                 v for ci, (v, _st) in enumerate(cells)
                 if ci != image_col and v not in (None, "", " ")
             ]
-            img = images.get(r) if image_col >= 0 else None
-            if not non_image_vals and img is None:
+            imgs = images.get(r, []) if image_col >= 0 else []
+            if not non_image_vals and not imgs:
                 parsed.n_blank_rows_skipped += 1
                 continue
 
@@ -782,7 +727,7 @@ def parse_xlsx_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
             parsed.rows.append(
                 ParsedRow(
                     cells=cells,
-                    image=img,
+                    images=imgs,
                     src_file=path.name,
                     src_sheet=ws.title,
                     src_row_0based=r - 1,
@@ -790,7 +735,7 @@ def parse_xlsx_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
                     row_height_pt=row_height,
                 )
             )
-            if img is not None:
+            if imgs:
                 n_rows_with_image += 1
             parsed.n_data_rows_total += 1
 
@@ -977,13 +922,13 @@ def _parse_one_sheet(
             v for c, (v, _x) in enumerate(cells)
             if c != image_col and v not in (None, "", " ")
         ]
-        img = images.get(r) if image_col >= 0 else None
+        imgs = images.get(r, []) if image_col >= 0 else []
 
-        if not non_image_vals and img is None:
+        if not non_image_vals and not imgs:
             parsed.n_blank_rows_skipped += 1
             logger.debug("[%s] 第 %d 行空白, 跳过", tag, r + 1)
             continue
-        if not non_image_vals and img is not None:
+        if not non_image_vals and imgs:
             logger.warning("[%s] 第 %d 行只有图片没有任何文本, 仍然保留", tag, r + 1)
 
         row_height = None
@@ -994,7 +939,7 @@ def _parse_one_sheet(
         parsed.rows.append(
             ParsedRow(
                 cells=cells,
-                image=img,
+                images=imgs,
                 src_file=path.name,
                 src_sheet=sh.name,
                 src_row_0based=r,
@@ -1002,7 +947,7 @@ def _parse_one_sheet(
                 row_height_pt=row_height,
             )
         )
-        if img is not None:
+        if imgs:
             n_rows_with_image += 1
         parsed.n_data_rows_total += 1
 
@@ -1221,26 +1166,38 @@ def write_merged_xlsx(
                 ws.cell(row=out_row, column=n_canon_cols + 1, value=src_label)
                 ws.cell(row=out_row, column=n_canon_cols + 2, value=prow.src_row_1based)
 
-                if prow.image is not None and canonical_image_col >= 0:
-                    fmt, image_bytes = prow.image
-                    buf, _ext = _prepare_image_bytes(image_bytes, fmt)
-                    try:
-                        xl_img = XLImage(buf)
-                        xl_img.width = _IMG_BOX_PX
-                        xl_img.height = _IMG_BOX_PX
-                        cell_addr = f"{get_column_letter(canonical_image_col + 1)}{out_row}"
-                        ws.add_image(xl_img, cell_addr)
-                        n_images_written += 1
-                    except Exception as e:
-                        logger.error(
-                            "[%s] 第 %d 行图片嵌入失败 (%s, %d 字节): %s",
-                            src_label, prow.src_row_1based, fmt, len(image_bytes), e,
-                        )
-                        logger.debug(traceback.format_exc())
+                if prow.images and canonical_image_col >= 0:
+                    cell_addr = f"{get_column_letter(canonical_image_col + 1)}{out_row}"
+                    # Excel drawing unit: 1 px = 9525 EMU
+                    _EMU_PER_PX = 9525
+                    for i, (fmt, image_bytes) in enumerate(prow.images):
+                        buf, _ext = _prepare_image_bytes(image_bytes, fmt)
+                        try:
+                            xl_img = XLImage(buf)
+                            xl_img.width = _IMG_BOX_PX
+                            xl_img.height = _IMG_BOX_PX
+                            ws.add_image(xl_img, cell_addr)
+                            # stack images vertically within the same cell
+                            try:
+                                anchor = getattr(xl_img, "anchor", None)
+                                if anchor is not None and hasattr(anchor, "_from"):
+                                    anchor._from.rowOff = int(i * _IMG_BOX_PX * _EMU_PER_PX)
+                            except Exception:
+                                pass
+                            n_images_written += 1
+                        except Exception as e:
+                            logger.error(
+                                "[%s] 第 %d 行图片嵌入失败 (%s, %d 字节): %s",
+                                src_label, prow.src_row_1based, fmt, len(image_bytes), e,
+                            )
+                            logger.debug(traceback.format_exc())
 
                 row_height = prow.row_height_pt
-                if prow.image is not None:
-                    row_height = max(row_height or 0, _IMG_ROW_HEIGHT_PT)
+                if prow.images:
+                    row_height = max(
+                        row_height or 0,
+                        _IMG_ROW_HEIGHT_PT * max(1, len(prow.images)),
+                    )
                 if row_height:
                     ws.row_dimensions[out_row].height = row_height
 
