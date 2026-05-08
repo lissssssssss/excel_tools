@@ -565,10 +565,46 @@ class ParsedFile:
     rows: list[ParsedRow] = field(default_factory=list)
     image_col: int = -1
     tracking_col: int = -1                # 快递单号列
+    freeze_header: bool = False           # 源 sheet 是否冻结了表头 (冻结首行)
     n_data_rows_total: int = 0
     n_blank_rows_skipped: int = 0
     col_widths_chars: dict = field(default_factory=dict)
     merges: list = field(default_factory=list)
+
+
+def _sheet_freezes_header_xlsx(ws) -> bool:
+    """判断 openpyxl worksheet 是否冻结了表头行。
+    约定: freeze_panes 的行号 > 1 即表示至少冻结了第 1 行。"""
+    fp = getattr(ws, "freeze_panes", None)
+    if fp is None:
+        return False
+    try:
+        # openpyxl 可能是 Cell，也可能是 "A2" 这样的字符串
+        if hasattr(fp, "row"):
+            return int(fp.row) > 1
+        s = str(fp)
+        digits = "".join(ch for ch in s if ch.isdigit())
+        if not digits:
+            return False
+        return int(digits) > 1
+    except Exception:
+        return False
+
+
+def _sheet_freezes_header_xls(sh) -> bool:
+    """尽量从 xlrd sheet 结构判断是否冻结首行。
+    xlrd 的 panes 字段在不同版本/文件中可能不存在；无法判断时返回 False。"""
+    panes = getattr(sh, "panes", None)
+    if not panes:
+        return False
+    try:
+        # xlrd 常见 panes 结构: (x_split, y_split, top_row, left_col)
+        if isinstance(panes, (list, tuple)) and len(panes) >= 3:
+            top_row = int(panes[2])
+            return top_row >= 1
+    except Exception:
+        return False
+    return False
 
 
 def parse_excel_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
@@ -700,6 +736,7 @@ def parse_xlsx_file(path: Path, logger: logging.Logger) -> list[ParsedFile]:
             header_cells=header_cells,
             image_col=image_col,
             tracking_col=tracking_col,
+            freeze_header=_sheet_freezes_header_xlsx(ws),
         )
 
         # column widths
@@ -903,6 +940,7 @@ def _parse_one_sheet(
         header_cells=header_cells,
         image_col=image_col,
         tracking_col=tracking_col,
+        freeze_header=_sheet_freezes_header_xls(sh),
     )
 
     for c, ci in (sh.colinfo_map or {}).items():
@@ -1119,7 +1157,8 @@ def write_merged_xlsx(
             ri = canonical_sh.rowinfo_map[0]
             if ri.height:
                 ws.row_dimensions[1].height = ri.height / 20.0
-    ws.freeze_panes = "A2"
+    if canonical.freeze_header:
+        ws.freeze_panes = "A2"
 
     # ---- 数据行 ----
     out_row = 2
