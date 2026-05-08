@@ -256,6 +256,9 @@ def extract_images_per_sheet(xls_path: Path, logger: logging.Logger):
     mso_drawings_per_sheet: dict = {}
     current_sheet_idx = -1  # -1 = globals 或未进入任何 sheet
     next_sheet_idx = 0
+    # BIFF 中 MSODRAWING/MSODRAWINGGROUP 经常由一个 record + 多个 CONTINUE(0x003C) 组成。
+    # 我们需要把 CONTINUE 拼回去，否则 OfficeArt 字节流不完整，会导致解析不到 shape。
+    last_mso_target = None  # ("dg") 或 ("sheet", idx) 或 None
     for rt, rd in _iter_biff(workbook_bytes):
         if rt == 0x0809 and len(rd) >= 4:
             substream_type = struct.unpack_from("<H", rd, 2)[0]
@@ -264,12 +267,25 @@ def extract_images_per_sheet(xls_path: Path, logger: logging.Logger):
             else:
                 current_sheet_idx = next_sheet_idx
                 next_sheet_idx += 1
+            last_mso_target = None
         elif rt == 0x000A:  # EOF
             current_sheet_idx = -1
+            last_mso_target = None
         elif rt == 0x00EB:
             mso_dg_group.extend(rd)
+            last_mso_target = ("dg",)
         elif rt == 0x00EC and current_sheet_idx >= 0:
             mso_drawings_per_sheet.setdefault(current_sheet_idx, bytearray()).extend(rd)
+            last_mso_target = ("sheet", current_sheet_idx)
+        elif rt == 0x003C and last_mso_target is not None:
+            # CONTINUE: 追加到最近的 MSODRAWING/MSODRAWINGGROUP
+            if last_mso_target[0] == "dg":
+                mso_dg_group.extend(rd)
+            elif last_mso_target[0] == "sheet":
+                idx = last_mso_target[1]
+                mso_drawings_per_sheet.setdefault(idx, bytearray()).extend(rd)
+        else:
+            last_mso_target = None
 
     blips_raw: list = []
     _walk_oart_for_blips(bytes(mso_dg_group), blips_raw)
