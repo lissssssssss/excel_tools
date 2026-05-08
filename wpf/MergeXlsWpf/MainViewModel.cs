@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using Forms = System.Windows.Forms;
 
 namespace MergeXlsWpf;
 
@@ -78,27 +79,27 @@ public sealed class MainViewModel : ObservableObject
 
     private void BrowseSourceDir()
     {
-        var dlg = new System.Windows.Forms.FolderBrowserDialog
+        var dlg = new Forms.FolderBrowserDialog
         {
             Description = "选择源目录（包含 .xls 文件）",
             UseDescriptionForTitle = true,
             ShowNewFolderButton = false
         };
         var result = dlg.ShowDialog();
-        if (result == System.Windows.Forms.DialogResult.OK)
+        if (result == Forms.DialogResult.OK)
             SourceDir = dlg.SelectedPath;
     }
 
     private void BrowseOutputDir()
     {
-        var dlg = new System.Windows.Forms.FolderBrowserDialog
+        var dlg = new Forms.FolderBrowserDialog
         {
             Description = "选择输出目录（写入 2月汇总.xlsx 等）",
             UseDescriptionForTitle = true,
             ShowNewFolderButton = true
         };
         var result = dlg.ShowDialog();
-        if (result == System.Windows.Forms.DialogResult.OK)
+        if (result == Forms.DialogResult.OK)
             OutputDir = dlg.SelectedPath;
     }
 
