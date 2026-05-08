@@ -1,0 +1,64 @@
+name: Build Windows single-exe (WPF + embedded core)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "merge_xls.py"
+      - "requirements.txt"
+      - "wpf/**"
+      - ".github/workflows/build-windows-single-exe.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build core merge_xls.exe (PyInstaller)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+          # Build: dist/merge_xls.exe
+          python -m PyInstaller --clean -y --onefile --name merge_xls merge_xls.py
+
+          # Put it where WPF csproj expects for embedding:
+          Copy-Item -Force .\dist\merge_xls.exe .\wpf\merge_xls.exe
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish WPF (single exe output)
+        run: |
+          dotnet publish .\wpf\MergeXlsWpf\MergeXlsWpf.csproj -c Release
+
+      - name: Collect artifact
+        run: |
+          $publishDir = Resolve-Path .\wpf\MergeXlsWpf\bin\Release\net8.0-windows\publish
+          New-Item -ItemType Directory -Force -Path .\artifacts | Out-Null
+          Copy-Item -Force "$publishDir\MergeXlsWpf.exe" .\artifacts\
+
+          # Optional: include README
+          Copy-Item -Force .\wpf\README_WPF.md .\artifacts\README_WPF.md
+
+      - name: Upload artifact (MergeXlsWpf.exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MergeXlsWpf-windows-single-exe
+          path: artifacts
+          if-no-files-found: error
+

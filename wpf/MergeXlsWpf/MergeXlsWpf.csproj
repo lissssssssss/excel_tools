@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Single-exe mode: embed merge_xls.exe into this assembly -->
+    <EmbeddedResource Include="..\merge_xls.exe"
+                      Condition="Exists('..\merge_xls.exe')"
+                      LogicalName="MergeXlsWpf.Payload.merge_xls.exe" />
+  </ItemGroup>
+</Project>
+

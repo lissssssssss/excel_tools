@@ -1,0 +1,111 @@
+<Window x:Class="MergeXlsWpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:MergeXlsWpf"
+        mc:Ignorable="d"
+        Title="Excel .xls 按月汇总（Python）" Height="760" Width="1100"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.DataContext>
+    <local:MainViewModel/>
+  </Window.DataContext>
+
+  <Grid Margin="14">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" FontSize="18" FontWeight="SemiBold" Text="按月合并 .xls → .xlsx（核心逻辑由 Python 执行）"/>
+
+    <Border Grid.Row="1" Margin="0,12,0,0" Padding="12" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="140"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="110"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="参数"/>
+        <TextBox Grid.Row="0" Grid.Column="1" Margin="10,0,10,0" Text="{Binding ExtraArgs, UpdateSourceTrigger=PropertyChanged}"/>
+        <Button Grid.Row="0" Grid.Column="2" Content="重置" Command="{Binding ResetArgsCommand}"/>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="2" Margin="0,12,0,0" Padding="12" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="140"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="110"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="源目录 (xls)"/>
+        <TextBox Grid.Row="0" Grid.Column="1" Margin="10,0,10,0" Text="{Binding SourceDir, UpdateSourceTrigger=PropertyChanged}"/>
+        <Button Grid.Row="0" Grid.Column="2" Content="选择..." Command="{Binding BrowseSourceDirCommand}"/>
+
+        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,10,0,0" VerticalAlignment="Center" Text="输出目录"/>
+        <TextBox Grid.Row="1" Grid.Column="1" Margin="10,10,10,0" Text="{Binding OutputDir, UpdateSourceTrigger=PropertyChanged}"/>
+        <Button Grid.Row="1" Grid.Column="2" Margin="0,10,0,0" Content="选择..." Command="{Binding BrowseOutputDirCommand}"/>
+      </Grid>
+    </Border>
+
+    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
+      <Button Width="140" Height="34" Margin="0,0,10,0"
+              Content="开始运行"
+              Command="{Binding RunCommand}"
+              IsEnabled="{Binding IsNotRunning}"/>
+      <Button Width="140" Height="34" Margin="0,0,10,0"
+              Content="取消"
+              Command="{Binding CancelCommand}"
+              IsEnabled="{Binding IsRunning}"/>
+      <Button Width="140" Height="34"
+              Content="清空日志"
+              Command="{Binding ClearLogCommand}"
+              IsEnabled="{Binding IsNotRunning}"/>
+    </StackPanel>
+
+    <ProgressBar Grid.Row="4" Height="10" Margin="0,8,0,0"
+                 IsIndeterminate="{Binding IsRunning}"/>
+
+    <Border Grid.Row="5" Margin="0,12,0,0" Padding="10" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+          <TextBlock DockPanel.Dock="Left" FontWeight="SemiBold" Text="运行日志"/>
+          <TextBlock DockPanel.Dock="Right" Foreground="#666" Text="{Binding StatusText}"/>
+        </DockPanel>
+        <TextBox Grid.Row="1"
+                 FontFamily="Consolas"
+                 FontSize="12"
+                 Text="{Binding LogText}"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto"
+                 TextWrapping="NoWrap"/>
+      </Grid>
+    </Border>
+
+    <TextBlock Grid.Row="6" Margin="0,12,0,0" Foreground="#666"
+               Text="提示：这是单一 exe 版本。核心 merge_xls.exe 已被内嵌在程序里，运行时会自动解压后执行。"/>
+  </Grid>
+</Window>
+
