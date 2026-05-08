@@ -1,8 +1,6 @@
-using System.Windows;
-
 namespace MergeXlsWpf;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
 }
 
