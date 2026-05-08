@@ -71,7 +71,7 @@ public sealed class MainViewModel : ObservableObject
     private void AppendLog(string line)
     {
         if (string.IsNullOrEmpty(line)) return;
-        Application.Current.Dispatcher.Invoke(() =>
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
             LogText += line + Environment.NewLine;
         });
@@ -112,18 +112,30 @@ public sealed class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "内嵌核心程序不可用", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(
+                ex.Message, "内嵌核心程序不可用",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error
+            );
             return;
         }
 
         if (string.IsNullOrWhiteSpace(SourceDir) || !Directory.Exists(SourceDir))
         {
-            MessageBox.Show("源目录无效，请选择包含 .xls 的目录。", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(
+                "源目录无效，请选择包含 .xls 的目录。", "错误",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error
+            );
             return;
         }
         if (string.IsNullOrWhiteSpace(OutputDir))
         {
-            MessageBox.Show("输出目录不能为空。", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(
+                "输出目录不能为空。", "错误",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error
+            );
             return;
         }
 
@@ -196,7 +208,11 @@ public sealed class MainViewModel : ObservableObject
             StatusText = "失败";
             AppendLog("");
             AppendLog("[WPF] ERROR: " + ex);
-            MessageBox.Show(ex.Message, "运行失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(
+                ex.Message, "运行失败",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error
+            );
         }
         finally
         {
